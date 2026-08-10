@@ -1,0 +1,57 @@
+{% extends "inventory/base.html" %}
+{% block title %}Order #{{ order.pk }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Order #{{ order.pk }}</h2>
+    <span class="badge badge-status
+        {% if order.status == 'completed' %}bg-success
+        {% elif order.status == 'cancelled' %}bg-secondary
+        {% else %}bg-warning text-dark{% endif %}" style="font-size: 1rem;">
+        {{ order.get_status_display }}
+    </span>
+</div>
+
+<div class="card card-stat p-4 mb-3">
+    <p><strong>Customer:</strong> {{ order.customer_name }} {% if order.customer_phone %}({{ order.customer_phone }}){% endif %}</p>
+    <p><strong>Staff:</strong> {{ order.staff.username }}</p>
+    <p><strong>Date:</strong> {{ order.date|date:"Y-m-d" }}</p>
+</div>
+
+<div class="card card-stat">
+    <table class="table mb-0">
+        <thead><tr><th>Product</th><th>Quantity</th><th>Price (at sale)</th><th>Subtotal</th></tr></thead>
+        <tbody>
+        {% for item in order.items.all %}
+        <tr>
+            <td>{{ item.product.name }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>Ksh. {{ item.selling_price }}</td>
+            <td>Ksh. {{ item.subtotal }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+        <tfoot>
+        <tr><th colspan="3" class="text-end">Total</th><th>Ksh. {{ order.total_amount }}</th></tr>
+        </tfoot>
+    </table>
+</div>
+
+<div class="mt-3">
+    {% if order.status == 'pending' %}
+    <form method="post" action="{% url 'inventory:order_complete' order.pk %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">Complete Order</button>
+    </form>
+    <form method="post" action="{% url 'inventory:order_cancel' order.pk %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger">Cancel Order</button>
+    </form>
+    {% elif order.status == 'completed' %}
+    <form method="post" action="{% url 'inventory:order_cancel' order.pk %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger">Cancel Order (restores stock)</button>
+    </form>
+    {% endif %}
+    <a href="{% url 'inventory:order_list' %}" class="btn btn-outline-secondary">Back to Orders</a>
+</div>
+{% endblock %}

@@ -1,0 +1,91 @@
+{% extends "inventory/base.html" %}
+{% block title %}New Sale{% endblock %}
+{% block content %}
+<h2 class="mb-4">New Sale</h2>
+
+<form method="post">
+    {% csrf_token %}
+    <div class="card card-stat p-4 mb-3" style="max-width: 600px;">
+        {% for field in order_form %}
+        <div class="mb-3">
+            <label class="form-label">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div class="text-danger small">{{ field.errors|striptags }}</div>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="card card-stat p-4">
+        <h5 class="mb-3">Items</h5>
+        {{ formset.management_form }}
+        {% if formset.non_form_errors %}
+            <div class="alert alert-danger">{{ formset.non_form_errors }}</div>
+        {% endif %}
+        <div id="formset-rows">
+            {% for item_form in formset %}
+            <div class="row g-2 mb-2 align-items-start formset-row">
+                {% for hidden in item_form.hidden_fields %}{{ hidden }}{% endfor %}
+                <div class="col-md-6">
+                    {{ item_form.product }}
+                    {% if item_form.product.errors %}<div class="text-danger small">{{ item_form.product.errors|striptags }}</div>{% endif %}
+                </div>
+                <div class="col-md-3">
+                    {{ item_form.quantity }}
+                    {% if item_form.quantity.errors %}<div class="text-danger small">{{ item_form.quantity.errors|striptags }}</div>{% endif %}
+                </div>
+                {% if item_form.DELETE %}
+                <div class="col-md-2 form-check mt-2">
+                    {{ item_form.DELETE }}
+                    <label class="form-check-label small">Remove</label>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <button type="button" id="add-row-btn" class="btn btn-outline-secondary btn-sm mt-2">+ Add another item</button>
+    </div>
+
+    <div class="mt-3">
+        <button type="submit" class="btn btn-primary">Create Order</button>
+        <a href="{% url 'inventory:order_list' %}" class="btn btn-outline-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Plain vanilla JS to let staff add more item rows beyond the initial
+// `extra` forms the formset renders - no external frontend framework,
+// just cloning the last row's HTML and bumping Django's formset
+// TOTAL_FORMS counter so the server recognizes the extra row on submit.
+const addRowBtn = document.getElementById('add-row-btn');
+const formsetRows = document.getElementById('formset-rows');
+const totalFormsInput = document.querySelector('#id_items-TOTAL_FORMS');
+
+addRowBtn.addEventListener('click', function () {
+    const rows = formsetRows.querySelectorAll('.formset-row');
+    const lastRow = rows[rows.length - 1];
+    const newIndex = rows.length;
+
+    const newRow = lastRow.cloneNode(true);
+    // Update every name="items-N-..." and id="id_items-N-..." attribute to
+    // use the new index, and clear any values copied from the last row.
+    newRow.querySelectorAll('input, select').forEach(function (el) {
+        if (el.name) {
+            el.name = el.name.replace(/items-\d+-/, `items-${newIndex}-`);
+        }
+        if (el.id) {
+            el.id = el.id.replace(/items-\d+-/, `items-${newIndex}-`);
+        }
+        if (el.type === 'checkbox') {
+            el.checked = false;
+        } else {
+            el.value = '';
+        }
+    });
+
+    formsetRows.appendChild(newRow);
+    totalFormsInput.value = newIndex + 1;
+});
+</script>
+{% endblock %}

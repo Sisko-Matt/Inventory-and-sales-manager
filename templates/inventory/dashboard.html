@@ -1,0 +1,80 @@
+{% extends "inventory/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2 class="mb-4">Dashboard</h2>
+
+<form method="get" class="row g-2 mb-4 align-items-end">
+    <div class="col-auto">
+        <label class="form-label small text-muted mb-0">From date</label>
+        <input type="date" name="from_date" value="{{ from_date }}" class="form-control">
+    </div>
+    <div class="col-auto">
+        <label class="form-label small text-muted mb-0">To date</label>
+        <input type="date" name="to_date" value="{{ to_date }}" class="form-control">
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-primary">Apply</button>
+        <a href="{% url 'inventory:dashboard' %}" class="btn btn-outline-secondary">Clear</a>
+    </div>
+</form>
+
+<div class="row g-3 mb-4">
+    <a href="{% url 'inventory:product_list' %}" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Total Products</div>
+            <div class="value">{{ total_products }}</div>
+        </div>
+    </a>
+    <a href="{% url 'inventory:product_list' %}?low_stock=1" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Low-Stock Products</div>
+            <div class="value text-warning">{{ low_stock_products }}</div>
+        </div>
+    </a>
+    <a href="{% url 'inventory:order_list' %}" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Total Orders</div>
+            <div class="value">{{ total_orders }}</div>
+        </div>
+    </a>
+    <a href="{% url 'inventory:order_list' %}?status=completed" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Completed Orders</div>
+            <div class="value text-success">{{ completed_orders_count }}</div>
+        </div>
+    </a>
+    <a href="{% url 'inventory:order_list' %}?status=pending" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Pending Orders</div>
+            <div class="value text-info">{{ pending_orders_count }}</div>
+        </div>
+    </a>
+    <a href="{% url 'inventory:order_list' %}?status=completed" class="col-md-3 col-sm-6 text-decoration-none">
+        <div class="card card-stat p-3 card-stat-link">
+            <div class="text-muted small">Total Revenue (Completed)</div>
+            <div class="value">Ksh.{{ total_revenue }}</div>
+        </div>
+    </a>
+</div>
+
+<h4 class="mb-3">Top 5 Best-Selling Products</h4>
+<div class="card card-stat">
+    <table class="table mb-0">
+        <thead><tr><th>Product</th><th>Quantity Sold</th></tr></thead>
+        <tbody>
+        {% for row in top_products %}
+        <tr>
+            <td>{{ row.product__name }}</td>
+            <td>{{ row.total_quantity }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="2" class="text-center text-muted py-3">No completed sales in this range yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-4">
+    <a href="{% url 'inventory:export_orders_csv' %}" class="btn btn-outline-secondary">Export Completed Orders CSV</a>
+</div>
+{% endblock %}

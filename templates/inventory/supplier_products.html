@@ -1,0 +1,24 @@
+{% extends "inventory/base.html" %}
+{% block title %}{{ supplier.name }}'s Products{% endblock %}
+{% block content %}
+<h2 class="mb-4">{{ supplier.name }}'s Products</h2>
+<div class="card card-stat">
+    <table class="table mb-0">
+        <thead><tr><th>Name</th><th>Category</th><th>Cost</th><th>Price</th><th>Stock</th></tr></thead>
+        <tbody>
+        {% for product in products %}
+        <tr>
+            <td>{{ product.name }}</td>
+            <td>{{ product.category.name }}</td>
+            <td>Ksh. {{ product.cost_price }}</td>
+            <td>Ksh. {{ product.selling_price }}</td>
+            <td>{{ product.quantity_in_stock }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="text-center text-muted py-3">No products from this supplier yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<a href="{% url 'inventory:supplier_list' %}" class="btn btn-outline-secondary mt-3">Back to Suppliers</a>
+{% endblock %}
