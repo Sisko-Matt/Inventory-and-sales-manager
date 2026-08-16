@@ -86,7 +86,10 @@ WSGI_APPLICATION = 'inventory_sales_manager.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-db_options = {'charset': 'utf8mb4'}
+db_options = {
+    'charset': 'utf8mb4',
+    'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+}
 db_ssl_ca = os.environ.get('DB_SSL_CA', '')
 if db_ssl_ca:
     ca_path = Path(db_ssl_ca)
@@ -99,7 +102,9 @@ if db_ssl_ca:
             f"the repo at that path relative to the project root (where "
             f"manage.py lives)."
         )
-    db_options['ssl'] = {'ca': str(ca_path)}
+    db_options = {
+    'charset': 'utf8mb4',
+    }
 
 DATABASES = {
     'default': {

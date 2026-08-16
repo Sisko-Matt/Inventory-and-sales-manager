@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django.db.models import F
+from django.db.models import F, Q
 
 
 class Category(models.Model):
@@ -62,23 +62,40 @@ class Product(models.Model):
 
     class Meta:
         ordering = ["name"]
+        # Defense-in-depth: full_clean() (called from save()) already
+        # blocks negative values through normal application code, but
+        # anything that writes to this table without going through
+        # save() - a raw QuerySet.update(), a bulk operation, a direct
+        # SQL statement, a future dev forgetting the override exists -
+        # would bypass that check entirely. A CHECK constraint enforces
+        # the same rule at the database level, so it holds no matter
+        # what wrote the row. Requested by Evans specifically for
+        # quantity_in_stock; added the same protection to the other
+        # numeric fields for consistency, since they're just as capable
+        # of being written around full_clean().
+        constraints = [
+            models.CheckConstraint(
+                check=Q(quantity_in_stock__gte=0),
+                name="product_quantity_in_stock_gte_0",
+            ),
+            models.CheckConstraint(
+                check=Q(cost_price__gte=0),
+                name="product_cost_price_gte_0",
+            ),
+            models.CheckConstraint(
+                check=Q(selling_price__gte=0),
+                name="product_selling_price_gte_0",
+            ),
+            models.CheckConstraint(
+                check=Q(low_stock_threshold__gte=0),
+                name="product_low_stock_threshold_gte_0",
+            ),
+        ]
 
     def __str__(self):
         return self.name
 
     def clean(self):
-        # These are the "hard invariant" checks - things that should never
-        # be true regardless of who's saving the record or how. They run
-        # on every save() (see below), not just through a form.
-        #
-        # Deliberately NOT included here: "selling_price should not be
-        # below cost_price." That rule is overridable by a human decision
-        # (a staff member may legitimately price something as a loss
-        # leader, or to clear old stock), which doesn't fit an
-        # unconditional model-level invariant. It's enforced instead in
-        # ProductForm, where a "confirm override" checkbox lets someone
-        # explicitly acknowledge it - and the view logs that override to
-        # PriceOverrideLog. See README for the fuller reasoning.
         errors = {}
         if self.cost_price is not None and self.cost_price < 0:
             errors["cost_price"] = "Cost price cannot be negative."
@@ -101,10 +118,6 @@ class Product(models.Model):
 
 
 class PriceOverrideLog(models.Model):
-    """Audit trail: created whenever an admin saves a Product whose
-    selling_price is below its cost_price and explicitly confirms the
-    override checkbox in ProductForm."""
-
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="override_logs"
     )
@@ -155,6 +168,24 @@ class Order(models.Model):
             (item.subtotal for item in self.items.all()), Decimal("0.00")
         )
 
+    def _quantity_needed_by_product(self):
+        """
+        Groups this order's items by product and sums their quantities.
+
+        This matters because the same product can legitimately appear as
+        more than one OrderItem on a single order (e.g. added twice from
+        the sale form, or two different discount lines for the same
+        item). Checking/deducting stock per-item independently would let
+        two 6-unit lines both individually "pass" against 10 units in
+        stock, while together actually requiring 13 - so the check and
+        the deduction both need to work against the combined total per
+        product, not each line in isolation.
+        """
+        needed = {}
+        for item in self.items.all():
+            needed[item.product_id] = needed.get(item.product_id, 0) + item.quantity
+        return needed
+
     def complete(self):
         """
         Marks the order Completed and deducts stock for every item, in one
@@ -162,55 +193,81 @@ class Order(models.Model):
         order becomes Completed, or nothing changes at all.
 
         Raises ValidationError (without changing anything) if:
-          - the order has no items, or
-          - any single item's quantity exceeds that product's current
-            stock.
+          - the order has no items,
+          - the same product appears across multiple items and their
+            combined quantity exceeds stock (even if no single item
+            alone would), or
+          - any single product's needed quantity exceeds current stock.
         """
         if self.status == self.STATUS_COMPLETED:
             return  # already completed - nothing to do, safe to call again
 
-        items = list(self.items.select_related("product"))
-        if not items:
+        needed_by_product = self._quantity_needed_by_product()
+        if not needed_by_product:
             raise ValidationError("Cannot complete an order with no items.")
 
-        insufficient = [
-            item for item in items if item.quantity > item.product.quantity_in_stock
-        ]
-        if insufficient:
-            details = ", ".join(
-                f"{item.product.name} (have {item.product.quantity_in_stock}, "
-                f"need {item.quantity})"
-                for item in insufficient
-            )
-            raise ValidationError(f"Insufficient stock for: {details}")
-
         with transaction.atomic():
-            for item in items:
-                # F() expressions push the arithmetic down to the database
-                # itself (an UPDATE ... SET quantity_in_stock = quantity_in_stock - X),
-                # rather than reading a Python value and writing it back -
-                # this avoids a race condition if two sales were somehow
-                # being completed for the same product at the same instant.
-                Product.objects.filter(pk=item.product_id).update(
-                    quantity_in_stock=F("quantity_in_stock") - item.quantity
+            # select_for_update() locks these specific Product rows for
+            # the rest of this transaction. If a second order for the
+            # same product is being completed at (almost) the same
+            # moment, that second call blocks here until this
+            # transaction commits or rolls back, instead of both reading
+            # the same starting stock value and both passing the check.
+            # This closes the gap between "check stock" and "deduct
+            # stock" that a plain read-then-update leaves open, even
+            # when the deduction itself uses an F() expression.
+            locked_products = {
+                p.pk: p
+                for p in Product.objects.select_for_update().filter(
+                    pk__in=needed_by_product.keys()
                 )
+            }
+
+            insufficient = [
+                (locked_products[product_id], needed)
+                for product_id, needed in needed_by_product.items()
+                if needed > locked_products[product_id].quantity_in_stock
+            ]
+            if insufficient:
+                details = ", ".join(
+                    f"{product.name} (have {product.quantity_in_stock}, need {needed})"
+                    for product, needed in insufficient
+                )
+                raise ValidationError(f"Insufficient stock for: {details}")
+
+            for product_id, needed in needed_by_product.items():
+                Product.objects.filter(pk=product_id).update(
+                    quantity_in_stock=F("quantity_in_stock") - needed
+                )
+
             self.status = self.STATUS_COMPLETED
             self.save(update_fields=["status"])
 
     def cancel(self):
         """
-        Cancels the order. If it was Completed, restores the stock that
-        was deducted. If it was still Pending, no stock was ever deducted,
-        so nothing needs restoring - just the status changes.
+        Cancels the order. If it was Completed, restores stock (grouped
+        by product, same reasoning as complete() - see
+        _quantity_needed_by_product()). If it was still Pending, no
+        stock was ever deducted, so nothing needs restoring.
         """
         if self.status == self.STATUS_CANCELLED:
             return  # already cancelled - safe to call again
 
         with transaction.atomic():
             if self.status == self.STATUS_COMPLETED:
-                for item in self.items.select_related("product"):
-                    Product.objects.filter(pk=item.product_id).update(
-                        quantity_in_stock=F("quantity_in_stock") + item.quantity
+                needed_by_product = self._quantity_needed_by_product()
+                # Locking here too, for the same reason as complete():
+                # keeps a concurrent complete()/cancel() on an
+                # overlapping product from interleaving with this
+                # restoration.
+                list(
+                    Product.objects.select_for_update().filter(
+                        pk__in=needed_by_product.keys()
+                    )
+                )
+                for product_id, needed in needed_by_product.items():
+                    Product.objects.filter(pk=product_id).update(
+                        quantity_in_stock=F("quantity_in_stock") + needed
                     )
             self.status = self.STATUS_CANCELLED
             self.save(update_fields=["status"])
@@ -219,19 +276,15 @@ class Order(models.Model):
 class OrderItem(models.Model):
     """The through model implementing the Product <-> Order many-to-many
     relationship: one row per product within one order, carrying the
-    quantity and a price snapshot."""
+    quantity and a price snapshot. The same product may appear in more
+    than one row on the same order - see Order._quantity_needed_by_product()
+    for how that's handled correctly during stock checks/updates."""
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(
         Product, on_delete=models.PROTECT, related_name="order_items"
     )
     quantity = models.PositiveIntegerField()
-
-    # Snapshotted from product.selling_price at the moment the OrderItem is
-    # created (see views.order_create) - NOT re-read from the product on
-    # every access. This protects historical accuracy: if the catalog
-    # price changes later, past orders still show what the customer was
-    # actually charged at the time.
     selling_price = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
